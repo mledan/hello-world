@@ -1,0 +1,46 @@
+"""Short Strangle Midterm - High IV play"""
+import pandas as pd
+from typing import Dict, List
+from datetime import datetime, timedelta
+import sys
+sys.path.append('/workspace')
+from core.base_strategy import BaseStrategy, StrategyConfig
+
+class ShortStrangleMidtermStrategy(BaseStrategy):
+    def __init__(self, config: StrategyConfig, data_fetcher, greeks_calculator, exposure_calculator):
+        super().__init__(config, data_fetcher, greeks_calculator, exposure_calculator)
+        self.dte_entry = config.parameters.get('dte_entry', 45)
+        self.delta_target = config.parameters.get('delta_target', 0.20)
+        self.profit_target_pct = config.parameters.get('profit_target_pct', 0.50)
+        
+    def generate_signals(self, market_data: pd.DataFrame) -> List[Dict]:
+        signals = []
+        if market_data.empty:
+            return signals
+        current_price = market_data['close'].iloc[-1]
+        current_time = market_data['timestamp'].iloc[-1]
+        
+        if not self.positions and current_time.weekday() == 0:
+            call_strike = round((current_price * 1.10) / 10) * 10 if self.config.symbol == 'TSLA' else round((current_price * 1.10) / 5) * 5
+            put_strike = round((current_price * 0.90) / 10) * 10 if self.config.symbol == 'TSLA' else round((current_price * 0.90) / 5) * 5
+            expiration = datetime.now() + timedelta(days=self.dte_entry)
+            signals.extend([
+                {'symbol': self.config.symbol, 'action': 'SELL', 'option_type': 'call', 'strike': call_strike,
+                 'expiration': expiration, 'quantity': 1, 'price': current_price * 0.02, 'signal_type': 'ENTRY_STRANGLE'},
+                {'symbol': self.config.symbol, 'action': 'SELL', 'option_type': 'put', 'strike': put_strike,
+                 'expiration': expiration, 'quantity': 1, 'price': current_price * 0.02, 'signal_type': 'ENTRY_STRANGLE'}
+            ])
+        
+        if self.positions:
+            for position in self.positions:
+                if position.pnl_pct >= self.profit_target_pct * 100:
+                    signals.append({'symbol': position.symbol, 'action': 'BUY', 'option_type': position.option_type,
+                        'strike': position.strike, 'expiration': position.expiration, 'quantity': abs(position.quantity),
+                        'price': position.current_price, 'signal_type': 'EXIT'})
+        return signals
+    
+    def get_entry_conditions(self) -> Dict:
+        return {'dte': f'{self.dte_entry} days', 'delta': f'{self.delta_target}'}
+    
+    def get_exit_conditions(self) -> Dict:
+        return {'profit_target': f'{self.profit_target_pct * 100}%'}
